@@ -104,10 +104,14 @@ locals {
     #!/bin/bash
     yum update -y
     amazon-linux-extras install docker -y
-    service docker start    
+    service docker start
 
     docker run -d -p 80:80 ${var.frontend_image}
     docker run -d -p 8080:8080 \
+      -e APP_CRYPTO_SECRET=${var.app_crypto_secret} \
+      -e APP_SES_EMAIL=${var.app_ses_email} \
+      -e AWS_ACCESS_KEY_ID=${var.aws_access_key_id} \
+      -e AWS_SECRET_ACCESS_KEY=${var.aws_secret_access_key} \
       -e DB_URL=jdbc:postgresql://${aws_rds_cluster.aurora.endpoint}:5432/postgres \
       -e DB_USERNAME=${local.db_user} \
       -e DB_PASSWORD=${random_password.db_master.result} \
@@ -134,7 +138,12 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-# 5. Outputs
+# 5. SES Email Verification
+resource "aws_ses_email_identity" "personal_email" {
+  email = var.app_ses_email
+}
+
+# 6. Outputs
 output "frontend_url" {
   description = "Public IP of the frontend"
   value       = aws_instance.app.public_dns
