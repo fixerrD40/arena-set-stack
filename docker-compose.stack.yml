@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  sharer:
+    image: ${SHARER_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/postgres
+      DB_USERNAME: postgres
+      DB_PASSWORD: ${DB_PASSWORD}
+      APP_CRYPTO_SECRET: ${APP_CRYPTO_SECRET}
+      APP_MAIL_USERNAME: ${APP_MAIL_USERNAME}
+      APP_MAIL_PASSWORD: ${APP_MAIL_PASSWORD}
+      APP_MAIL_HOST: smtp.gmail.com
+      APP_MAIL_PORT: "587"
+      APP_HOST: ${APP_HOST}
+      APP_COVERS_DIR: /covers
+    volumes:
+      - covers_data:/covers
+
+  cracker:
+    image: ${CRACKER_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      - sharer
+    ports:
+      - "80:80"
+    environment:
+      # Public HTTP origin; nginx on :80 proxies /auth and /api to sharer.
+      BASE_URL: ${APP_HOST}
+
+volumes:
+  postgres_data:
+  covers_data:

@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (gitignored). Do not commit real values.
+# AWS credentials come from your profile / env — not from this file.
+
+alert_email         = ""
+app_crypto_secret   = ""
+app_mail_username   = ""
+app_mail_password   = ""
+ssh_ingress_cidr    = "x.x.x.x/32"
+ssh_public_key      = "ssh-ed25519 AAAA... comment"
+
+# Optional overrides:
+# aws_region     = "us-east-2"
+# instance_type  = "t3.small"
+# cracker_image  = "hhmidb/arena-set-cracker:latest"
+# sharer_image   = "hhmidb/arena-set-sharer:latest"

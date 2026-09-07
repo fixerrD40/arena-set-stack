@@ -1,7 +1,15 @@
 terraform {
+  required_version = ">= 1.5.0"
+
   required_providers {
-    aws = { source = "hashicorp/aws", version = ">= 6.11.0" }
-    random = { source = "hashicorp/random" }
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.5"
+    }
   }
 }
 
@@ -9,75 +17,72 @@ provider "aws" {
   region = var.aws_region
 }
 
-# 1. VPC and Subnets
-resource "aws_vpc" "main" {
-  cidr_block            = "10.0.0.0/16"
-  enable_dns_hostnames  = true
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
 
-  tags                  = { Name = "main-vpc" }
-}
-
-resource "aws_subnet" "public" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
-  map_public_ip_on_launch = true
-  availability_zone       = "us-east-2a"
-  tags = { Name = "public-subnet" }
-}
-
-resource "aws_subnet" "private" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.2.0/24"
-  map_public_ip_on_launch = false
-  availability_zone       = "us-east-2a"
-  tags = { Name = "private-subnet" }
-}
-
-resource "aws_subnet" "private_b" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.3.0/24"
-  map_public_ip_on_launch = false
-  availability_zone       = "us-east-2b"
-  tags = { Name = "private-subnet-b" }
-}
-
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.main.id
-}
-
-resource "aws_route_table" "public_rt" {
-  vpc_id = aws_vpc.main.id
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.igw.id
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
   }
 }
 
-resource "aws_route_table_association" "public_assoc" {
+resource "random_password" "db" {
+  length  = 24
+  special = false
+}
+
+locals {
+  name       = "arena-set-stack"
+  db_password = random_password.db.result
+  public_url  = "http://${aws_eip.stack.public_ip}"
+}
+
+# --- Network (public only; no NAT) ---
+
+resource "aws_vpc" "stack" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+  tags                 = { Name = "${local.name}-vpc" }
+}
+
+resource "aws_internet_gateway" "stack" {
+  vpc_id = aws_vpc.stack.id
+  tags   = { Name = "${local.name}-igw" }
+}
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.stack.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = true
+  availability_zone       = "${var.aws_region}a"
+  tags                    = { Name = "${local.name}-public" }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.stack.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.stack.id
+  }
+
+  tags = { Name = "${local.name}-public-rt" }
+}
+
+resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public.id
-  route_table_id = aws_route_table.public_rt.id
+  route_table_id = aws_route_table.public.id
 }
 
-resource "aws_route_table" "private_rt" {
-  vpc_id = aws_vpc.main.id
-}
-
-resource "aws_route_table_association" "private_assoc" {
-  subnet_id      = aws_subnet.private.id
-  route_table_id = aws_route_table.private_rt.id
-}
-
-resource "aws_route_table_association" "private_assoc_b" {
-  subnet_id      = aws_subnet.private_b.id
-  route_table_id = aws_route_table.private_rt.id
-}
-
-# 2. Security Groups
-resource "aws_security_group" "ec2_sg" {
-  vpc_id      = aws_vpc.main.id
-  description = "Allow HTTP and SSH"
+resource "aws_security_group" "app" {
+  name        = "${local.name}-app"
+  description = "HTTP + SSH"
+  vpc_id      = aws_vpc.stack.id
 
   ingress {
+    description = "HTTP"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -85,10 +90,11 @@ resource "aws_security_group" "ec2_sg" {
   }
 
   ingress {
+    description = "SSH"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.ssh_ingress_cidr]
   }
 
   egress {
@@ -97,128 +103,203 @@ resource "aws_security_group" "ec2_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = { Name = "${local.name}-app-sg" }
 }
 
-resource "aws_security_group" "db_sg" {
-  vpc_id      = aws_vpc.main.id
-  description = "Allow DB traffic from EC2"
+# --- Compute ---
 
-  ingress {
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.ec2_sg.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+resource "aws_key_pair" "stack" {
+  key_name   = "${local.name}-key"
+  public_key = var.ssh_public_key
 }
 
-# 3. RDS PostgreSQL
-resource "random_password" "db_master" {
-  length  = 16
-  special = false
+resource "aws_eip" "stack" {
+  domain = "vpc"
+  tags   = { Name = "${local.name}-eip" }
 }
 
-resource "aws_db_subnet_group" "private_db_subnet" {
-  name = "private-db-subnet"
-  subnet_ids = [
-    aws_subnet.private.id,
-    aws_subnet.private_b.id
-  ]
-
-  tags = {
-    Name = "private-db-subnet"
-  }
-}
-
-resource "aws_db_instance" "postgres" {
-  identifier              = "my-postgres-db"
-  engine                  = "postgres"
-  instance_class          = "db.t3.micro"
-  username                = local.db_user
-  password                = random_password.db_master.result
-  allocated_storage       = 20
-  max_allocated_storage   = 100
-  db_subnet_group_name    = aws_db_subnet_group.private_db_subnet.name
-  vpc_security_group_ids  = [aws_security_group.db_sg.id]
-  publicly_accessible     = false
-  skip_final_snapshot     = true
-  deletion_protection     = false
-
-  tags = {
-    Name = "my-postgres-db"
-  }
-}
-
-# 4. EC2 Instance
-locals {
-  db_user = "db_admin"
-
-  user_data = <<-EOF
-    #!/bin/bash
-    exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
-    yum update -y
-    amazon-linux-extras install docker -y
-    service docker start
-
-    PUBLIC_HOSTNAME=$(curl -s http://169.254.169.254/latest/meta-data/public-hostname)
-    docker run -d --network host -p 80:80 -e BASE_URL="http://$PUBLIC_HOSTNAME" ${var.frontend_image}
-    docker run -d --network host -p 8080:8080 \
-      -e APP_CRYPTO_SECRET="${var.app_crypto_secret}" \
-      -e APP_HOST="http://$PUBLIC_HOSTNAME" \
-      -e APP_SES_EMAIL="${var.app_ses_email}" \
-      -e AWS_ACCESS_KEY_ID="${var.aws_access_key_id}" \
-      -e AWS_SECRET_ACCESS_KEY="${var.aws_secret_access_key}" \
-      -e DB_URL="jdbc:postgresql://${aws_db_instance.postgres.address}:5432/postgres" \
-      -e DB_USERNAME="${local.db_user}" \
-      -e DB_PASSWORD="${random_password.db_master.result}" \
-      ${var.backend_image}
-  EOF
-}
-
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
-  }
-}
-
-resource "aws_instance" "app" {
-  ami                         = data.aws_ami.amazon_linux.id
-  instance_type               = "t3.micro"
+resource "aws_instance" "stack" {
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = var.instance_type
   subnet_id                   = aws_subnet.public.id
-  vpc_security_group_ids      = [aws_security_group.ec2_sg.id]
-  user_data                   = local.user_data
+  vpc_security_group_ids      = [aws_security_group.app.id]
+  key_name                    = aws_key_pair.stack.key_name
+  associate_public_ip_address = true
 
-  tags                        = { Name = "app-instance" }
+  root_block_device {
+    volume_size = 30
+    volume_type = "gp3"
+    encrypted   = true
+  }
+
+  user_data = templatefile("${path.module}/user-data.sh.tpl", {
+    public_url         = local.public_url
+    cracker_image      = var.cracker_image
+    sharer_image       = var.sharer_image
+    db_password        = local.db_password
+    app_crypto_secret  = var.app_crypto_secret
+    app_mail_username  = var.app_mail_username
+    app_mail_password  = var.app_mail_password
+    compose_yaml_b64   = base64encode(file("${path.module}/docker-compose.stack.yml"))
+  })
+
+  tags = { Name = local.name }
+
+  lifecycle {
+    ignore_changes = [ami]
+  }
 }
 
-# 5. SES Email Identity
-resource "aws_ses_email_identity" "personal_email" {
-  email = var.app_ses_email
+resource "aws_eip_association" "stack" {
+  instance_id   = aws_instance.stack.id
+  allocation_id = aws_eip.stack.id
 }
 
-# 6. Outputs
-output "frontend_url" {
-  description = "Public IP of the frontend"
-  value       = aws_instance.app.public_dns
+# Nightly EBS snapshot of the root volume (postgres + covers live here via Docker volumes).
+resource "aws_dlm_lifecycle_policy" "root_snapshots" {
+  description        = "${local.name} root volume snapshots"
+  execution_role_arn = aws_iam_role.dlm.arn
+  state              = "ENABLED"
+
+  policy_details {
+    resource_types = ["VOLUME"]
+
+    target_tags = {
+      Name = local.name
+    }
+
+    schedule {
+      name = "nightly"
+
+      create_rule {
+        interval      = 24
+        interval_unit = "HOURS"
+        times         = ["07:00"]
+      }
+
+      retain_rule {
+        count = 7
+      }
+
+      copy_tags = true
+    }
+  }
+
+  tags = { Name = "${local.name}-dlm" }
 }
 
-output "db_endpoint" {
-  description = "RDS PostgreSQL endpoint"
-  value       = aws_db_instance.postgres.address
+# Tag root volume so DLM can find it (instance Name tag is on the instance; volumes need their own).
+resource "aws_ec2_tag" "root_volume_name" {
+  resource_id = aws_instance.stack.root_block_device[0].volume_id
+  key         = "Name"
+  value       = local.name
 }
 
-output "db_master_password" {
-  description = "Initial DB master password"
-  value       = random_password.db_master.result
+resource "aws_iam_role" "dlm" {
+  name = "${local.name}-dlm"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "dlm.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "dlm" {
+  role       = aws_iam_role.dlm.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+}
+
+# --- Alerts (EC2 metrics only — no agent / no SSM) ---
+
+resource "aws_sns_topic" "alerts" {
+  name = "${local.name}-alerts"
+}
+
+resource "aws_sns_topic_subscription" "alerts_email" {
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
+}
+
+resource "aws_cloudwatch_metric_alarm" "traffic" {
+  alarm_name          = "${local.name}-traffic"
+  alarm_description   = "People may be hitting the box — consider real infra (RDS/ALB)."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 3
+  metric_name         = "NetworkIn"
+  namespace           = "AWS/EC2"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = var.traffic_network_in_bytes
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+
+  dimensions = {
+    InstanceId = aws_instance.stack.id
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "status" {
+  alarm_name          = "${local.name}-status"
+  alarm_description   = "EC2 status check failed."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 2
+  metric_name         = "StatusCheckFailed"
+  namespace           = "AWS/EC2"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 1
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+
+  dimensions = {
+    InstanceId = aws_instance.stack.id
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "cpu" {
+  alarm_name          = "${local.name}-cpu"
+  alarm_description   = "CPU high — box may be too small."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 3
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 70
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+
+  dimensions = {
+    InstanceId = aws_instance.stack.id
+  }
+}
+
+# --- Outputs ---
+
+output "public_url" {
+  description = "HTTP URL of the stack (cracker nginx)"
+  value       = local.public_url
+}
+
+output "instance_id" {
+  value = aws_instance.stack.id
+}
+
+output "db_password" {
+  description = "Generated Postgres password (also on the box compose env)"
+  value       = local.db_password
   sensitive   = true
+}
+
+output "alert_topic_arn" {
+  value = aws_sns_topic.alerts.arn
 }
