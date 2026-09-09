@@ -44,6 +44,12 @@ variable "ssh_public_key" {
   type        = string
 }
 
+variable "hostname" {
+  description = "DNS name or IP for the public site (no scheme). Becomes APP_HOST https://hostname. Empty = http://EIP."
+  type        = string
+  default     = ""
+}
+
 variable "cracker_image" {
   description = "Docker Hub image for the Angular/nginx client"
   type        = string

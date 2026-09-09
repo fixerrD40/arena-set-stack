@@ -33,9 +33,10 @@ resource "random_password" "db" {
 }
 
 locals {
-  name       = "arena-set-stack"
+  name        = "arena-set-stack"
   db_password = random_password.db.result
-  public_url  = "http://${aws_eip.stack.public_ip}"
+  # hostname set → https://hostname; empty → http://EIP for first boot.
+  public_url  = var.hostname != "" ? "https://${var.hostname}" : "http://${aws_eip.stack.public_ip}"
 }
 
 # --- Network (public only; no NAT) ---
@@ -77,14 +78,22 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_security_group" "app" {
-  name        = "${local.name}-app"
-  description = "HTTP + SSH"
+  name_prefix = "${local.name}-app-"
+  description = "HTTP + HTTPS + SSH"
   vpc_id      = aws_vpc.stack.id
 
   ingress {
     description = "HTTP"
     from_port   = 80
     to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -102,6 +111,10 @@ resource "aws_security_group" "app" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 
   tags = { Name = "${local.name}-app-sg" }
@@ -286,8 +299,13 @@ resource "aws_cloudwatch_metric_alarm" "cpu" {
 # --- Outputs ---
 
 output "public_url" {
-  description = "HTTP URL of the stack (cracker nginx)"
+  description = "Public APP_HOST / BASE_URL (https://hostname, or http://EIP if hostname is empty)"
   value       = local.public_url
+}
+
+output "eip" {
+  description = "Elastic IP (Cloudflare A-record target)"
+  value       = aws_eip.stack.public_ip
 }
 
 output "instance_id" {

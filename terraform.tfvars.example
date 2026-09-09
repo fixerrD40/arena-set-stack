@@ -7,6 +7,7 @@ app_mail_username   = ""
 app_mail_password   = ""
 ssh_ingress_cidr    = "x.x.x.x/32"
 ssh_public_key      = "ssh-ed25519 AAAA... comment"
+hostname            = ""
 
 # Optional overrides:
 # aws_region     = "us-east-2"

@@ -21,7 +21,7 @@ compose() {
   fi
 }
 
-mkdir -p /opt/arena-set-stack
+mkdir -p /opt/arena-set-stack/certs
 cd /opt/arena-set-stack
 
 echo "${compose_yaml_b64}" | base64 -d > docker-compose.yml

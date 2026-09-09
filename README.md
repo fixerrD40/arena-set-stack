@@ -79,6 +79,49 @@ Browser/dev stays `ng serve` + `http://localhost:8080`.
 
 User-data installs Docker and runs `docker-compose.stack.yml` under `/opt/arena-set-stack`:
 
-- **cracker** `:80` → proxies `/auth` and `/api` to **sharer**
+- **cracker** `:80` / `:443` → proxies `/auth` and `/api` to **sharer**
 - **sharer** `:8080` → **postgres** + covers volume
 - Gmail SMTP via `APP_MAIL_*`
+
+## HTTPS (Cloudflare Origin CA + Full strict)
+
+Orange-cloud DNS at Cloudflare; browsers get Universal SSL. Origin TLS uses a free **Origin CA** cert on the box (not in the Docker image).
+
+1. **Terraform** — in `terraform.tfvars`:
+
+   ```hcl
+   hostname = "your.example"
+   ```
+
+   That becomes `APP_HOST=https://your.example`. Leave empty to keep `http://EIP`.
+
+   `terraform apply` opens **443** on the SG and (for new boots) sets `APP_HOST`. Existing instances do **not** re-run user-data; patch the box `.env` yourself (step 4).
+
+2. **Origin cert** — Cloudflare → SSL/TLS → Origin Server → Create certificate for your domain (and `www` if you use it). Save as:
+
+   ```text
+   /opt/arena-set-stack/certs/origin.pem
+   /opt/arena-set-stack/certs/origin-key.pem
+   ```
+
+   `chmod 600` the key. Create the directory if missing: `sudo mkdir -p /opt/arena-set-stack/certs`.
+
+3. **Cracker image** — from `arena-set-cracker`, rebuild/push so nginx listens on 443:
+
+   ```bash
+   docker build -t hhmidb/arena-set-cracker:latest .
+   docker push hhmidb/arena-set-cracker:latest
+   ```
+
+4. **On the box** — refresh compose (scp the updated `docker-compose.stack.yml` → `/opt/arena-set-stack/docker-compose.yml`), then:
+
+   ```bash
+   cd /opt/arena-set-stack
+   # set APP_HOST=https://your.example in .env
+   sudo docker-compose pull cracker
+   sudo docker-compose up -d
+   ```
+
+5. **Cloudflare** — SSL/TLS mode → **Full (strict)**. Confirm `https://your.example` loads (clipboard API needs this secure context).
+
+Until the origin cert + new image are live, leave mode on **Flexible** so Cloudflare still reaches `:80`.

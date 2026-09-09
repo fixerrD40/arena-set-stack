@@ -39,8 +39,12 @@ services:
       - sharer
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      # Cloudflare Origin CA (or other) certs on the host — not in the image.
+      - /opt/arena-set-stack/certs:/etc/nginx/certs:ro
     environment:
-      # Public HTTP origin; nginx on :80 proxies /auth and /api to sharer.
+      # Public origin URL (https://your.domain when DNS + TLS are live).
       BASE_URL: ${APP_HOST}
 
 volumes:
