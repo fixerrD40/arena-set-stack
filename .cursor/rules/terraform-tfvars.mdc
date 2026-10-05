@@ -1,0 +1,20 @@
+---
+description: Leave real Terraform variable files to the user; edit only the example template
+alwaysApply: true
+---
+
+# Terraform tfvars stay with the user
+
+`terraform.tfvars` holds live secrets and is gitignored. Do not read, grep, diff, format, or quote it. The same applies to `*.auto.tfvars` and `*.tfvars.json`.
+
+Stop at `terraform.tfvars.example`. When a variable is added or changed, update that template and tell the user what to set locally.
+
+```bash
+# ❌ BAD — fmt walks terraform.tfvars and prints its values
+terraform fmt -check -diff
+
+# ✅ GOOD — templates only
+terraform fmt main.tf variables.tf terraform.tfvars.example
+```
+
+Do not run `terraform plan` or `terraform apply`. Those load the real tfvars. Leave apply and any check of live values to the user.
