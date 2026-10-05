@@ -36,7 +36,27 @@ locals {
   name        = "arena-set-stack"
   db_password = random_password.db.result
   # hostname set → https://hostname; empty → http://EIP for first boot.
-  public_url  = var.hostname != "" ? "https://${var.hostname}" : "http://${aws_eip.stack.public_ip}"
+  public_url = var.hostname != "" ? "https://${var.hostname}" : "http://${aws_eip.stack.public_ip}"
+  # https://www.cloudflare.com/ips-v4 — origin is IPv4-only, so v6 ranges are unused.
+  # Refresh from that URL if Cloudflare announces a range change.
+  cloudflare_ipv4 = [
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+  ]
+  http_ingress_cidrs = var.cloudflare_only ? local.cloudflare_ipv4 : ["0.0.0.0/0"]
 }
 
 # --- Network (public only; no NAT) ---
@@ -83,19 +103,19 @@ resource "aws_security_group" "app" {
   vpc_id      = aws_vpc.stack.id
 
   ingress {
-    description = "HTTP"
+    description = var.cloudflare_only ? "HTTP from Cloudflare" : "HTTP"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = local.http_ingress_cidrs
   }
 
   ingress {
-    description = "HTTPS"
+    description = var.cloudflare_only ? "HTTPS from Cloudflare" : "HTTPS"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = local.http_ingress_cidrs
   }
 
   ingress {
@@ -147,14 +167,14 @@ resource "aws_instance" "stack" {
   }
 
   user_data = templatefile("${path.module}/user-data.sh.tpl", {
-    public_url         = local.public_url
-    cracker_image      = var.cracker_image
-    sharer_image       = var.sharer_image
-    db_password        = local.db_password
-    app_crypto_secret  = var.app_crypto_secret
-    app_mail_username  = var.app_mail_username
-    app_mail_password  = var.app_mail_password
-    compose_yaml_b64   = base64encode(file("${path.module}/docker-compose.stack.yml"))
+    public_url        = local.public_url
+    cracker_image     = var.cracker_image
+    sharer_image      = var.sharer_image
+    db_password       = local.db_password
+    app_crypto_secret = var.app_crypto_secret
+    app_mail_username = var.app_mail_username
+    app_mail_password = var.app_mail_password
+    compose_yaml_b64  = base64encode(file("${path.module}/docker-compose.stack.yml"))
   })
 
   tags = { Name = local.name }

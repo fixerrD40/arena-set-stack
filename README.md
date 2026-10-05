@@ -87,6 +87,8 @@ User-data installs Docker and runs `docker-compose.stack.yml` under `/opt/arena-
 
 Orange-cloud DNS at Cloudflare; browsers get Universal SSL. Origin TLS uses a free **Origin CA** cert on the box (not in the Docker image).
 
+By default, security-group rules for **80** and **443** allow only [Cloudflare's IPv4 ranges](https://www.cloudflare.com/ips-v4). Direct hits on the Elastic IP time out, so a leaked origin address cannot skip the proxy. SSH stays on `ssh_ingress_cidr`. Set `cloudflare_only = false` only while you still need to open `http://<eip>` before DNS is proxied. If Cloudflare publishes a new range, update `local.cloudflare_ipv4` in `main.tf` and apply — that updates the security group in place.
+
 1. **Terraform** — in `terraform.tfvars`:
 
    ```hcl

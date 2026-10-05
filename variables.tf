@@ -39,6 +39,12 @@ variable "ssh_ingress_cidr" {
   type        = string
 }
 
+variable "cloudflare_only" {
+  description = "Restrict 80/443 to Cloudflare's published IPv4 ranges. Set false only to reach the Elastic IP directly before DNS is proxied."
+  type        = bool
+  default     = true
+}
+
 variable "ssh_public_key" {
   description = "SSH public key material for the instance key pair"
   type        = string
